@@ -32,11 +32,13 @@ TO DO:
                  because otherwise 200gb of data may need to be loaded at ones
 20.02.2025
 java sockets text and file
-TO DO:
+
 	Bug 1. When a file is being send buffers of bytes are beeing send trough the socket. <- this proces runs on a separate 
 	       thread so the listenForMessages() function can still get text msgs from the other user. The problem occurs when 
 	       a file is being send through the socket in the reciveFile() function the data is beeing proccessed and the
 	       listenForMassages() also reads from the pipe resulting in printing the contents of the file.
 
-
-
+TO DO:
+	1. List for multiple files 
+	
+		-we use list and not queue so we can adjust the position of the files based on there priority 

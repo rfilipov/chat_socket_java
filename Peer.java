@@ -1,6 +1,8 @@
 import java.io.*;
 import java.net.*;
+import java.util.ArrayList;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Queue;
 
 
@@ -18,6 +20,7 @@ public class Peer
 
     private final Queue<String> messageQueue = new LinkedList<>();
     private final Object messageQueueMonitor = new Object();
+    private List<File_Object> fileObjects = new ArrayList<>();
 
     public Peer(int port, String host, String name)
     {
@@ -86,26 +89,49 @@ public class Peer
                 {
                     System.out.println(name + " received: " + message.substring(5));
                 }
+
                 else if (message.startsWith("FILE_START:"))
                 {
                     String[] parts = message.split(":");
-                    if (parts.length < 3)
+                    if (parts.length < 4)
                     {
                         System.out.println("Invalid file start header received.");
                         continue;
                     }
-
+    
                     String filename = parts[1];
                     long fileSize = Long.parseLong(parts[2]);
-                    System.out.println(name + " is about to receive file: " + filename + " of size " + fileSize);
+                    int priority = Integer.parseInt(parts[3]);
+    
+                    System.out.println(name + " is about to receive file: " + filename + " of size " + fileSize + " with priority " + priority);
+    
+                    File_Object newFile = new File_Object(filename, priority);
+
+                    addFileWithPreority(newFile);
+    
                     new Thread(() -> receiveFile(filename, fileSize)).start();
                 }
+
             }
         }
         catch (IOException e)
         {
             System.err.println("Error reading messages.");
             e.printStackTrace();
+        }
+    }
+
+    private void addFileWithPreority(File_Object newFile)
+    {
+        synchronized (fileObjects) 
+        {
+            int priority = newFile.getPriority();
+
+            int index = 0;
+            while (index < fileObjects.size() && fileObjects.get(index).getPriority() >= priority)
+                index++;
+            
+            fileObjects.add(index, newFile);
         }
     }
     
@@ -147,7 +173,6 @@ public class Peer
                 }
             }
         }
-    
     }
 
     public int getBufferSize(int file_size)
