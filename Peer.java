@@ -99,14 +99,23 @@ public class Peer
             String message;
             while ((message = recive.readLine()) != null)
             {
+                final String fileStartMsg = message;  /// my code mabe doesn't work
                 if (message.startsWith("TEXT:"))
                 {
                     System.out.println(name + " received: " + message.substring(5));
                 }
                 else if (message.startsWith("FILE_START:"))
                 {
-                    final String fileStartMsg = message; 
                     new Thread(() -> create_file(fileStartMsg)).start();
+                    sleep(10); // waits to be sure the file is created so we have somewhere to append
+                }
+                else if(message.startsWith("Chunk:"))
+                {
+                    new Thread(() -> fill_file(fileStartMsg)).start(); // not sure but mabe can have a problem, file is not already created and we try to append data in to it
+                }
+                else
+                {
+                    System.out.println("EROR INVALID MSG!!!");
                 }
             }
         }
@@ -116,6 +125,37 @@ public class Peer
             e.printStackTrace();
         }
     }
+
+    public void fill_file(String message)
+    {
+        String[] parts = message.split(":");
+        if (parts.length < 3)
+        {
+            System.out.println("Invalid FILE_CHUNCK header: " + message);
+            return;
+        }
+        
+        String file_path = parts[1];
+        int size = (int) Long.parseLong(parts[2]);
+
+        byte []buffer = new byte[size];
+
+        try (InputStream inputStream = socket.getInputStream()) 
+        {
+            int bytesRead = inputStream.read(buffer);
+
+            if (bytesRead != -1) 
+            {
+                String receivedData = new String(buffer, 0, bytesRead);
+                System.out.println("Received: " + receivedData);
+            }
+        }
+        catch (IOException e) 
+        { 
+            e.printStackTrace();
+        }
+    }
+
 
     public void create_file(String message)
     {
