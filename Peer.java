@@ -1,10 +1,21 @@
 import java.io.*;
 import java.net.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 
+/*
+    notifyAll() is a method that, when called on an object's monitor, wakes up all threads that are waiting on that monitor 
+    (i.e. that previously called wait() on that object). Once awakened, those threads will compete to re-acquire the object's lock and resume execution.
+
+    In other words, if multiple threads are waiting (using wait()) on a particular monitor, notifyAll() signals them that something 
+    has changed so they can all try to proceed.
+
+    Would you like further details or an example?
+ */
 
 public class Peer 
 {
@@ -48,6 +59,7 @@ public class Peer
             
             new Thread(() -> listenForMessages()).start();
             new Thread(() -> processMessageQueue()).start();
+            new Thread(() -> processFileList()).start();
             
             serverSocket.close();
         }
@@ -70,6 +82,8 @@ public class Peer
             
             new Thread(() -> listenForMessages()).start(); 
             new Thread(() -> processMessageQueue()).start();
+            new Thread(() -> processFileList()).start();
+
         }
         catch (IOException e) 
         {
@@ -91,23 +105,80 @@ public class Peer
                 }
                 else if (message.startsWith("FILE_START:"))
                 {
-                    String[] parts = message.split(":");
-                    if (parts.length < 3)
-                    {
-                        System.out.println("Invalid file start header received.");
-                        continue;
-                    }
-
-                    String filename = parts[1];
-                    long fileSize = Long.parseLong(parts[2]);
-                    System.out.println(name + " is about to receive file: " + filename + " of size " + fileSize);
-                    new Thread(() -> receiveFile(filename, fileSize)).start();
+                    final String fileStartMsg = message; 
+                    new Thread(() -> reciveMsgs(fileStartMsg)).start();
                 }
             }
         }
         catch (IOException e)
         {
             System.err.println("Error reading messages.");
+            e.printStackTrace();
+        }
+    }
+
+    public void reciveMsgs(String message)
+    {
+        try
+        {
+
+            String[] parts = message.split(":");
+            if (parts.length < 3)
+            {
+                System.out.println("Invalid FILE_START header: " + message);
+                return;
+            }
+            String filename = parts[1];
+            long fileSize = Long.parseLong(parts[2]);
+            System.out.println(name + " is about to receive file: " + filename + " of size " + fileSize);
+            
+
+            FileOutputStream fos = new FileOutputStream(filename);
+            
+            DataInputStream dis = new DataInputStream(socket.getInputStream());
+            
+
+            while (true)
+            {
+
+                String header = recive.readLine();
+                if (header == null)
+                {
+                    System.out.println("Connection closed unexpectedly.");
+                    break;
+                }
+                if (header.startsWith("CHUNK:"))
+                {
+
+                    String[] chunkParts = header.split(":");
+                    if (chunkParts.length < 3)
+                    {
+                        System.out.println("Invalid CHUNK header: " + header);
+                        continue;
+                    }
+                    int chunkSize = Integer.parseInt(chunkParts[2]);
+                    byte[] buffer = new byte[chunkSize];
+                    
+
+                    dis.readFully(buffer, 0, chunkSize);
+                    fos.write(buffer);
+                }
+                else if (header.startsWith("FILE_END:"))
+                {
+
+                    System.out.println(name + " finished receiving file: " + filename);
+                    break;
+                }
+                else
+                {
+                    System.out.println(name + " received unexpected header during file transfer: " + header);
+                }
+            }
+            fos.close();
+        }
+        catch (IOException e)
+        {
+            System.err.println("Error receiving file in reciveMsgs:");
             e.printStackTrace();
         }
     }
@@ -170,46 +241,109 @@ public class Peer
         }
     }
 
-    public void sendFile(String filePath)
+    public void addFileForSending(String filePath, int priority)
     {
-        new Thread(() -> 
-        {
-            synchronized (fileTransferLock)
+        new Thread(() ->
             {
-                File file = new File(filePath);
-                if (!file.exists())
+                synchronized (fileTransferLock)
                 {
-                    System.err.println("File not found: " + filePath);
-                    return;
-                }
-                try 
-                {
-                    FileInputStream fileInputStream = new FileInputStream(file);
-                    BufferedOutputStream outStream = new BufferedOutputStream(socket.getOutputStream());
+                    File_Object new_File_Object = new File_Object(filePath, priority);
 
-                    synchronized (outputLock)
+                    int index = 0;
+                    while (index < fileObjects.size() && fileObjects.get(index).getPriority() >= priority)
                     {
-                        send.println("FILE_START:" + file.getName() + ":" + file.length());
+                        index++;
                     }
+                    
+                    fileObjects.add(index, new_File_Object);
+                }
+            }
+        ).start();
+    }
 
-                 
-                    int remaining = (int) file.length();
-                    int buffer_size = getBufferSize(remaining);
-                    byte[] buffer = new byte[buffer_size];
+    public void processFileList()
+    {
+    
+        while (true)
+        {
+            List<File_Object> highestPriorityFiles = new ArrayList<>();
 
-                    int bytesRead;
-                    while (remaining > 0 && (bytesRead = fileInputStream.read(buffer, 0, Math.min(buffer_size, remaining))) != -1)
-                    {   
-                        synchronized (outputLock)
-                        {
-                            outStream.write(buffer, 0, bytesRead);
-                            outStream.flush();
-                        }
-                        
-                        remaining -= bytesRead;
-                        buffer_size = getBufferSize(remaining);
-                        buffer = new byte[buffer_size];
-                        
+            synchronized (fileObjects)
+            {
+                if (fileObjects.isEmpty())
+                {
+                    try 
+                    {
+                        fileObjects.wait();
+                    }
+                    catch (InterruptedException e)
+                    {
+                        return;
+                    }
+                }
+
+                int maxPriority = fileObjects.stream()
+                                             .mapToInt(File_Object::getPriority)
+                                             .max()
+                                             .orElse(Integer.MIN_VALUE);
+
+                for (File_Object file : fileObjects)
+                {
+                    if (file.getPriority() == maxPriority)
+                    {
+                        highestPriorityFiles.add(file);
+                    }
+                }
+            }
+
+            if (!highestPriorityFiles.isEmpty())
+            {
+
+                sendFilesRoundRobin(highestPriorityFiles);
+
+
+                synchronized (fileObjects)
+                {
+                    fileObjects.removeAll(highestPriorityFiles); /// remove file after beeing send not like now remove all files after they are all send
+                }
+            }
+        }
+    }
+
+    private void sendFilesRoundRobin(List<File_Object> files)
+    {
+
+        Map<File_Object, FileInputStream> fileStreams = new HashMap<>();
+        Map<File_Object, Integer> remainingBytes = new HashMap<>();
+
+        try 
+        {
+
+            for (File_Object file : files)
+            {
+                File f = new File(file.getFileName());
+                if (!f.exists()) continue;
+
+                FileInputStream fis = new FileInputStream(f);
+                fileStreams.put(file, fis);
+                remainingBytes.put(file, (int) f.length());
+
+                synchronized (outputLock)
+                {
+                    send.println("FILE_START:" + file.getFileName() + ":" + f.length());
+                }
+            }
+
+            boolean filesRemaining = true;
+            while (filesRemaining)
+            {
+                filesRemaining = false;
+
+                for (File_Object file : files)
+                {
+                    if (remainingBytes.get(file) > 0)
+                    {
+
                         synchronized (messageQueueMonitor)
                         {
                             if (!messageQueue.isEmpty())
@@ -218,58 +352,48 @@ public class Peer
                                 sleep(0);
                             }
                         }
-                        
-                        sleep(0);
-                    }
+                        filesRemaining = true;
+                        if(!sendFileChunk(file, fileStreams.get(file), remainingBytes))
+                        {
+                            
+                            synchronized (outputLock)
+                            {
+                                send.println("FILE_END:" + file.getFileName());
+                            }
 
-                    System.out.println(name + " finished sending file " + file.getName());
-                    fileInputStream.close();
-                }
-                catch (Exception e)
-                {
-                    System.err.println("Error sending file: " + filePath);
-                    e.printStackTrace();
-                }
-            }
-        }).start();
-    }
-
-    private void receiveFile(String filename, long fileSize)
-    {
-        synchronized (fileTransferLock)
-        {
-            try 
-            {
-                FileOutputStream fileOutputStream = new FileOutputStream(filename);
-                BufferedInputStream inStream = new BufferedInputStream(socket.getInputStream());
-    
-                int remaining = (int) fileSize;
-                while (remaining > 0)
-                {
-                    int currentBufferSize = getBufferSize(remaining);
-                    byte[] buffer = new byte[currentBufferSize];
-    
-                    int bytesRead = inStream.read(buffer, 0, currentBufferSize);
-                    if (bytesRead == -1)
-                    {
-                        break;
+                            fileStreams.get(file).close();
+                        }
                     }
-    
-                    fileOutputStream.write(buffer, 0, bytesRead);
-                    remaining -= bytesRead;
                 }
-    
-                fileOutputStream.close();
-                System.out.println(name + " received file: " + filename);
-            }
-            catch (IOException e)
-            {
-                System.err.println("Error receiving file: " + filename);
-                e.printStackTrace();
             }
         }
+        catch (IOException e)
+        {
+            e.printStackTrace();
+        }
     }
-    
+
+    private boolean sendFileChunk(File_Object file, FileInputStream fis, Map<File_Object, Integer> remainingBytes) throws IOException
+    {
+        int bufferSize = getBufferSize(remainingBytes.get(file));
+        byte[] buffer = new byte[bufferSize];
+
+        int bytesRead = fis.read(buffer, 0, bufferSize);
+        if (bytesRead == -1) return false;
+
+        synchronized (outputLock)
+        {
+            send.println("CHUNK:" + file.getFileName() + ":" + bytesRead);
+            send.flush();
+
+            socket.getOutputStream().write(buffer, 0, bytesRead);
+            socket.getOutputStream().flush();
+        }
+
+        remainingBytes.put(file, remainingBytes.get(file) - bytesRead);
+        
+        return true;
+    }
 
     public void closeConnection()
     {

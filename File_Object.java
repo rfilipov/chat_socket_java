@@ -59,7 +59,7 @@ public class File_Object
         if (bytesRead == -1) 
         {
             close();
-            return null; // End of file reached
+            return null;
         }
 
         if (bytesRead < blockSize) 

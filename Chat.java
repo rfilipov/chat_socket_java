@@ -71,7 +71,7 @@ public class Chat
                 if (msg.startsWith("file:"))
                 {
                     String filePath = msg.substring(5).trim();
-                    sender.sendFile(filePath);
+                    sender.addFileForSending(filePath, 0);
                 }
                 else
                 {
