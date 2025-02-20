@@ -106,7 +106,7 @@ public class Peer
                 else if (message.startsWith("FILE_START:"))
                 {
                     final String fileStartMsg = message; 
-                    new Thread(() -> reciveMsgs(fileStartMsg)).start();
+                    new Thread(() -> create_file(fileStartMsg)).start();
                 }
             }
         }
@@ -117,11 +117,10 @@ public class Peer
         }
     }
 
-    public void reciveMsgs(String message)
+    public void create_file(String message)
     {
         try
         {
-
             String[] parts = message.split(":");
             if (parts.length < 3)
             {
@@ -130,58 +129,19 @@ public class Peer
             }
             String filename = parts[1];
             long fileSize = Long.parseLong(parts[2]);
-            System.out.println(name + " is about to receive file: " + filename + " of size " + fileSize);
-            
+            System.out.println(name + " is preparing to receive file: " + filename + " of size " + fileSize);
 
             FileOutputStream fos = new FileOutputStream(filename);
-            
-            DataInputStream dis = new DataInputStream(socket.getInputStream());
-            
-
-            while (true)
-            {
-
-                String header = recive.readLine();
-                if (header == null)
-                {
-                    System.out.println("Connection closed unexpectedly.");
-                    break;
-                }
-                if (header.startsWith("CHUNK:"))
-                {
-
-                    String[] chunkParts = header.split(":");
-                    if (chunkParts.length < 3)
-                    {
-                        System.out.println("Invalid CHUNK header: " + header);
-                        continue;
-                    }
-                    int chunkSize = Integer.parseInt(chunkParts[2]);
-                    byte[] buffer = new byte[chunkSize];
-                    
-
-                    dis.readFully(buffer, 0, chunkSize);
-                    fos.write(buffer);
-                }
-                else if (header.startsWith("FILE_END:"))
-                {
-
-                    System.out.println(name + " finished receiving file: " + filename);
-                    break;
-                }
-                else
-                {
-                    System.out.println(name + " received unexpected header during file transfer: " + header);
-                }
-            }
             fos.close();
+
         }
         catch (IOException e)
         {
-            System.err.println("Error receiving file in reciveMsgs:");
+            System.err.println("Error creating file in reciveFiles:");
             e.printStackTrace();
         }
-    }
+}
+
     
     public void sendMsg(String message)
     {
