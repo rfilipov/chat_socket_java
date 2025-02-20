@@ -1,47 +1,26 @@
 import java.io.*;
 import java.net.*;
-
-/*
-    The problem was if there was no server socket ready to listen when the users try to connect the connection fails 
-*/
+import java.util.LinkedList;
+import java.util.Queue;
 
 /*
     The connection established by the code is bidirectional. This means that even though 
     one peer starts as a "server" (accepting the connection) and the other as a "client" 
     (initiating the connection), once the connection is established both peers have an 
     input and an output stream. They can both send and receive data simultaneously over the same socket.
-
+    
     In other words, both peers can send messages to one another; the roles of server and client 
     are only used to establish the connection, but once connected, the communication is full-duplex.
 */
 
 /*
-    StartServer function creates a thread for listening for msgs for the first Peer
-    StartConnection function creates a thread for listaning for msgs for the second Peer
+    We use two main locks:
+    - outputLock: Ensures that text messages and file data chunks do not interleave.
+    - fileTransferLock: Ensures that only one file transfer happens at a time.
+    
+    Additionally, we use a message queue and a monitor (messageQueueMonitor) to store text messages.
+    A dedicated thread processes this queue so that if more than one message is waiting, they are all sent.
 */
-
-/*
-    Sending: beacouce we need to diferentiat what is text and what file every msg is send with a header(a text in the begining TEXT: FILE:) that way we know what is what
-    first we send the file main inforamtion the is it file name of the file and file size separated by :
- 
-*/
-
-
-/*
-    Why We Don't Need sleep() in receiveFile()
-    1️⃣ Reading from a socket is naturally controlled by TCP flow control
-
-    If there’s no data available, inStream.read(buffer) blocks until data arrives.
-    This prevents CPU overuse and ensures efficient data transfer.
-    2️⃣ Adding sleep() would slow down file reception
-
-    Each time sleep() is called, it pauses the loop, delaying file transfer unnecessarily.
-    This could increase file transfer time significantly, especially for large files.
-    3️⃣ Unlike sendFile(), we don’t need to give priority to text messages
-
-    In sendFile(), we use sleep() to allow text messages to be sent in between file chunks.
-    In receiveFile(), the receiver is just waiting for data, and listenForMessages() is already running in another thread, so text messages are handled separately.
- */
 
 public class Peer 
 {
@@ -52,11 +31,15 @@ public class Peer
     private PrintWriter send;
     private BufferedReader recive;
 
-    // Lock object to synchronize output so that text messages have priority over file data.
+    // Lock to synchronize output so that messages and file chunks don't interleave.
     private final Object outputLock = new Object();
-    // Lock object to ensure only one file transfer happens at a time.
+    // Lock to ensure only one file transfer happens at a time.
     private final Object fileTransferLock = new Object();
-    
+
+    // Queue and monitor for storing outgoing text messages.
+    private final Queue<String> messageQueue = new LinkedList<>();
+    private final Object messageQueueMonitor = new Object();
+
     public Peer(int port, String host, String name)
     {
         this.port = port;
@@ -64,13 +47,13 @@ public class Peer
         this.name = name;
     }
     
-    public int get_port() { return port; }
+    public int get_port()    { return port; }
     public String get_host() { return host; }
     public String get_name() { return name; }
     
     /* 
-        Starting a server socket first so we can listen otherwise the connection can't be established 
-        Accepting the connection from the other user
+        Starting a server socket so we can listen for a connection.
+        Once a connection is accepted, we start listening for messages and start the message queue processor.
     */  
     public void startServer()
     {
@@ -84,12 +67,15 @@ public class Peer
             System.out.println(name + " accepted connection.");
             
             // streams used for communication through the socket 
-            send = new PrintWriter(socket.getOutputStream(), true); // autoflush = true, sending the msgs instantly without waiting to fill the buffer
+            send = new PrintWriter(socket.getOutputStream(), true); // autoflush = true
             recive = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             
+            // Start listening for messages in a separate thread.
             new Thread(() -> listenForMessages()).start();
+            // Start the message queue processor so that queued messages are sent as soon as possible.
+            processMessageQueue();
             
-            serverSocket.close(); // after the peers are connected we have no use for the socket and we can close it(that way we use only one socket for communication)
+            serverSocket.close();
         }
         catch (IOException e)
         {
@@ -102,7 +88,7 @@ public class Peer
     {
         try 
         {   
-            // We have already opened serversocket for listening when we try to connect we connect with no problems
+            // Connect as a client
             socket = new Socket(targetHost, targetPort);
             System.out.println(name + " connected to " + targetHost + " on port " + targetPort);
             
@@ -110,7 +96,10 @@ public class Peer
             send = new PrintWriter(socket.getOutputStream(), true);
             recive = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             
+            // Start listening for messages in a separate thread.
             new Thread(() -> listenForMessages()).start();
+            // Start the message queue processor.
+            processMessageQueue();
         }
         catch (IOException e) 
         {
@@ -120,8 +109,7 @@ public class Peer
     }
     
     // Continuously read messages from the socket.
-    // this code runs on a separate thread so while we listen for incoming msgs we can send as well
-    // socket uses TCP, so we can send and receive data at the same time
+    // This runs on a separate thread so we can send and receive concurrently.
     private void listenForMessages()
     {
         try 
@@ -129,7 +117,7 @@ public class Peer
             String message;
             while ((message = recive.readLine()) != null)
             {
-                // Check if the message is a text message or a file header/data
+                // Check if the message is a text message or a file header.
                 if (message.startsWith("TEXT:"))
                 {
                     System.out.println(name + " received: " + message.substring(5));
@@ -147,8 +135,7 @@ public class Peer
                     long fileSize = Long.parseLong(parts[2]);
                     System.out.println(name + " is receiving file: " + filename + " of size " + fileSize);
                     
-                    // we create a new thread for reciving the information about the file 
-                    // if we don't create a new thread then text msgs will be send but will be deliverd when the file is transferd
+                    // Start a new thread for receiving the file so that text messages are not blocked.
                     new Thread(() -> receiveFile(filename, fileSize)).start();
                 }
                 else
@@ -164,15 +151,79 @@ public class Peer
         }
     }
     
+    /* 
+        Instead of sending a text message directly, we add it to a queue.
+        A separate thread (processMessageQueue) will send all queued messages.
+    */
     public void sendMsg(String message)
     {
-        synchronized (outputLock)
+        synchronized (messageQueueMonitor)
         {
-            send.println("TEXT:" + message);
-            System.out.println(name + " sent: \"" + message + "\"");
+            messageQueue.offer("TEXT:" + message);
+            messageQueueMonitor.notifyAll();
+        }
+        System.out.println(name + " queued text: \"" + message + "\"");
+    }
+    
+    // This thread continually checks the message queue and sends any waiting messages.
+    private void processMessageQueue()
+    {
+        new Thread(() -> 
+        {
+            while (true)
+            {
+                String msg = null;
+                synchronized (messageQueueMonitor)
+                {
+                    while (messageQueue.isEmpty())
+                    {
+                        try 
+                        {
+                            messageQueueMonitor.wait();
+                        }
+                        catch (InterruptedException e)
+                        {
+                            // Exit the thread if interrupted.
+                            return;
+                        }
+                    }
+                    msg = messageQueue.poll();
+                }
+                if (msg != null)
+                {
+                    synchronized (outputLock)
+                    {
+                        send.println(msg);
+                    }
+                }
+            }
+        }).start();
+    }
+
+    // Returns the buffer size: if file size is less than 2MB, use the file size, else use 200KB.
+    public int getBufferSize(int file_size)
+    {
+        return (file_size < 2000000 ? file_size : 200000);
+    }
+
+    // A helper sleep method.
+    public void sleep(int time)
+    {
+        try 
+        {
+            Thread.sleep(time);
+        }
+        catch (InterruptedException e) 
+        {
+            e.printStackTrace();
         }
     }
-    // we need to open a thread for when we send a file , so we can continue to send text msgs with no delay
+
+    /* 
+        Sends a file in a separate thread.
+        Uses a dynamically allocated buffer (allocated only once) and checks if text messages are waiting.
+        If there are waiting messages, it yields briefly (using wait/notify) to allow those messages to be sent.
+    */
     public void sendFile(String filePath)
     {
         new Thread(() -> 
@@ -190,24 +241,42 @@ public class Peer
                     FileInputStream fileInputStream = new FileInputStream(file);
                     BufferedOutputStream outStream = new BufferedOutputStream(socket.getOutputStream());
 
-                    // Send file header with file name and size.
                     synchronized (outputLock)
                     {
+                        // Send file header with file name and size.
                         send.println("FILE:" + file.getName() + ":" + file.length());
                     }
 
-                    byte[] buffer = new byte[4096];  // 4KB buffer size
+                    int file_size = (int) file.length();
+                    int buffer_size = getBufferSize(file_size);
+                    byte[] buffer = new byte[buffer_size];  // Allocate once
+
                     int bytesRead;
-                    while ((bytesRead = fileInputStream.read(buffer)) != -1)
+                    while (file_size > 0 && (bytesRead = fileInputStream.read(buffer, 0, Math.min(buffer_size, file_size))) != -1)
                     {
+                        // Before sending this chunk, check if there are waiting messages.
+                        synchronized (messageQueueMonitor)
+                        {
+                            if (!messageQueue.isEmpty())
+                            {
+                                // Yield control briefly to allow queued text messages to be processed.
+                                messageQueueMonitor.notifyAll();
+                                Thread.sleep(5);  // Wait up to 5ms or until messages are sent.
+                            }
+                        }
+                        
                         synchronized (outputLock)
                         {
                             outStream.write(buffer, 0, bytesRead);
                             outStream.flush(); // Ensure data is sent immediately
                         }
+
+                        file_size -= bytesRead;
+                        buffer_size = getBufferSize(file_size);
+                        buffer = new byte[buffer_size];  // mabe can be removed
+
                     }
 
-                    // Send file end marker
                     synchronized (outputLock)
                     {
                         send.println("FILE_END:" + file.getName());
@@ -225,40 +294,34 @@ public class Peer
         }).start();
     }
 
-    // we don't need to create a new thread for reciving file, the socket handels that for us we can send and recive at the same time
+    // Receives a file in a separate thread. Only one file transfer happens at a time due to fileTransferLock.
     private void receiveFile(String filename, long fileSize)
     {
-        try 
+        synchronized (fileTransferLock)
         {
-            FileOutputStream fileOutputStream = new FileOutputStream(filename);
-            BufferedInputStream inStream = new BufferedInputStream(socket.getInputStream());
-
-            byte[] buffer = new byte[4096];  // 4KB buffer size
-            int bytesRead;
-            long remaining = fileSize;
-
-            while (remaining > 0 && (bytesRead = inStream.read(buffer, 0, (int) Math.min(buffer.length, remaining))) != -1)
+            try 
             {
-                fileOutputStream.write(buffer, 0, bytesRead);
-                remaining -= bytesRead;
-                //======================================================
-                // Allow text messages to be recived in between file chunks
-                Thread.sleep(50);
-                //======================================================
-            }
+                FileOutputStream fileOutputStream = new FileOutputStream(filename);
+                BufferedInputStream inStream = new BufferedInputStream(socket.getInputStream());
 
-            fileOutputStream.close();
-            System.out.println(name + " received file: " + filename);
-        }
-        catch (IOException e)
-        {
-            System.err.println("Error receiving file: " + filename);
-            e.printStackTrace();
-        } 
-        catch (InterruptedException e) 
-        {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
+                byte[] buffer = new byte[4096];  // 4KB buffer size
+                int bytesRead;
+                long remaining = fileSize;
+
+                while (remaining > 0 && (bytesRead = inStream.read(buffer, 0, (int) Math.min(buffer.length, remaining))) != -1)
+                {
+                    fileOutputStream.write(buffer, 0, bytesRead);
+                    remaining -= bytesRead;
+                }
+
+                fileOutputStream.close();
+                System.out.println(name + " received file: " + filename);
+            }
+            catch (IOException e)
+            {
+                System.err.println("Error receiving file: " + filename);
+                e.printStackTrace();
+            }
         }
     }
 

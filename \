@@ -1,0 +1,32 @@
+19.02.2025
+java sockets text and files 
+TO DO:
+ 	1. Sleep beatween sending data blocks is not always needed
+		
+		-sleep(0) means that the shared resources used by one thread are freed if some other thread wants to used them.
+		
+		-we need to free the socket(shared resources) only if there is text message waiting to be send, if there is not
+		 stoping the already working thread is waist of time and resoures
+			
+			-find an action that can stop a thread only if some event has happend(IMPORTANT), wait(), notify()
+
+	2. Overhead for chunk sending
+		
+		-the headers send need to be as small as possible because the larger the  head is more usless information is send
+		 via the socket 
+
+		-chunks need to be dynamicly allocated becauce if we have large files and small chunks a lot of overhead for
+		 headres will be used, if the chunks are large and the files are small a lot of empty chunks will be send which
+		 is waistful
+
+		-decresing the header size down to a byte because overhead will become smaller(using bit operations)
+	
+		-size of the chunk needs to be as big as the time it is needed to be send  to be 1 sec 
+		
+	3. Multiple files being send(preority for files being send)
+		
+		-using some sort of queue where each file is represented by chunks and there is a header at the beging of every
+		 new file
+	
+		-loading big amound of data in the queue for sending multiple files, should be made on portions not at ones
+                 because otherwise 200gb of data may need to be loaded at ones

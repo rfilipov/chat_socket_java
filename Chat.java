@@ -8,24 +8,24 @@ public class Chat
 {   
     private Peer p1, p2;
     
-    public Chat(Peer serverPeer, Peer clientPeer) 
+    public Chat(Peer p1, Peer p2)
     {
-        this.p1 = serverPeer;
-        this.p2 = clientPeer;
+        this.p1 = p1;
+        this.p2 = p2;
     }
     
     /* 
-        we use one of the users to open a server socket that way there is someone listening at the target port 
-        then the other user can connect and there will be no error that way
-
-        after the connection is established we can close the server socket because we don't use it for the communication
+        We use one of the users to open a server socket so that there is someone listening at the target port, 
+        then the other user can connect and there will be no error.
+        
+        After the connection is established we can close the server socket because we don't use it for the communication.
     */
     public void connectUsers() 
     {
-        /// starting the server socket to establish the connection
+        /// Starting the server socket to establish the connection
         new Thread(() -> p1.startServer()).start();
         
-        /// sleep the thread to wait for the connection to be established
+        /// Sleep briefly to wait for the connection to be established
         try 
         {
             Thread.sleep(1000);
@@ -35,7 +35,7 @@ public class Chat
             e.printStackTrace();
         }
         
-        /// now there is already a serversocket listening so we can connect the other user with their socket 
+        /// Now that there is already a server socket listening, we can connect the other user with their socket 
         p2.startConnection(p1.get_host(), p1.get_port());
     }
     
@@ -52,7 +52,7 @@ public class Chat
                 System.out.print("Enter message (or file:path to send a file): ");
                 String msg = r.readLine();
 
-                /// if the admin types "kill", the chat will close
+                /// If the admin types "kill", the chat will close
                 if(username.equals("admin") && msg.equals("kill"))
                 {
                     System.out.println("Chat connection ended!");
@@ -95,12 +95,12 @@ public class Chat
     
     public void runChat()
     {
-        /// after the connection has been made, 2 threads are created for listening for messages for both peers
+        /// After the connection is made, two threads are created for listening for messages for both peers.
         connectUsers();
         getUserToSendMsg();
     }
 
-    // when the socket is closed an exception will be thrown that will result in the killing of the thread
+    // When the socket is closed, an exception will be thrown that will result in the termination of the thread.
     public void killChat()
     {
         p1.closeConnection();
