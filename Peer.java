@@ -89,49 +89,26 @@ public class Peer
                 {
                     System.out.println(name + " received: " + message.substring(5));
                 }
-
                 else if (message.startsWith("FILE_START:"))
                 {
                     String[] parts = message.split(":");
-                    if (parts.length < 4)
+                    if (parts.length < 3)
                     {
                         System.out.println("Invalid file start header received.");
                         continue;
                     }
-    
+
                     String filename = parts[1];
                     long fileSize = Long.parseLong(parts[2]);
-                    int priority = Integer.parseInt(parts[3]);
-    
-                    System.out.println(name + " is about to receive file: " + filename + " of size " + fileSize + " with priority " + priority);
-    
-                    File_Object newFile = new File_Object(filename, priority);
-
-                    addFileWithPreority(newFile);
-    
+                    System.out.println(name + " is about to receive file: " + filename + " of size " + fileSize);
                     new Thread(() -> receiveFile(filename, fileSize)).start();
                 }
-
             }
         }
         catch (IOException e)
         {
             System.err.println("Error reading messages.");
             e.printStackTrace();
-        }
-    }
-
-    private void addFileWithPreority(File_Object newFile)
-    {
-        synchronized (fileObjects) 
-        {
-            int priority = newFile.getPriority();
-
-            int index = 0;
-            while (index < fileObjects.size() && fileObjects.get(index).getPriority() >= priority)
-                index++;
-            
-            fileObjects.add(index, newFile);
         }
     }
     
@@ -173,6 +150,7 @@ public class Peer
                 }
             }
         }
+    
     }
 
     public int getBufferSize(int file_size)
