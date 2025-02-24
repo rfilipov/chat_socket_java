@@ -1,0 +1,19 @@
+	
+
+	1. Adding padding 
+		- at the front of every header(to know where a file ends)  ( why I have put such a tings) ("!,}{")
+
+	2. Recovory 
+		- sending data again if it is bad
+	
+	3. CheckSums (md5)
+		- add check sums in the header
+
+	4. things to read 
+		- "++ = algoritmi"
+		- tcp? udp? tcp vs udp
+		- checksums (md5)
+
+	5. throwing exceptions and testing can/how I  recover from such a exception
+
+	6. learn how to use git

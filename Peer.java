@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class Peer 
 {
+
     private final int bufferMaxSize = 2000000;
     private int port;
     private String host;
@@ -18,13 +19,12 @@ public class Peer
     private Queue<byte[]> Messages = new ConcurrentLinkedQueue<>();
     private Queue<String> Files = new LinkedList<>();
     private Queue<ByteArrayTuple> Chunks = new LinkedList<>();   
-    private int chunck_number = 0;
+    private String padding = "!,}{";
 
     private final Object FilesLock = new Object();
     private final Object DataLock  = new Object();
 
     private File lastCreatedFile;
-    private int lastFileSize = -1;
 
     public Peer(int port, String host, String name) 
     {
@@ -79,8 +79,45 @@ public class Peer
         new Thread(this::fillQueue).start();
     }
 
+    public void printMsg(byte[] data)
+    {
+        String message = new String(data, StandardCharsets.UTF_8);
+        System.out.println(name + " received message: " + message);
+    }
 
+    public void createFile(byte[] data) throws IOException
+    {
+        String fileName = new String(data, StandardCharsets.UTF_8);
+        File file = new File(fileName);
+        if (!file.exists()) 
+        {
+            file.createNewFile();
+        }   
+        lastCreatedFile = file;
+        System.out.println(name + " receiving file: " + fileName);
+    }
 
+    public void writeChunkToFile(byte[] data)
+    {
+        if (lastCreatedFile != null)
+        {
+            try (FileOutputStream fos = new FileOutputStream(lastCreatedFile, true))
+            {
+                fos.write(data);
+                System.out.println("Receiving");
+            }
+            catch (IOException e)
+            {
+                System.err.println("Error writing data to file " + lastCreatedFile.getName());
+                e.printStackTrace();
+            }
+        }
+        else
+        {
+            System.err.println("No file created to write data to.");
+        }
+    }
+ 
     public void listenForData() 
     {
         try 
@@ -89,64 +126,30 @@ public class Peer
             DataInputStream dataInputStream = new DataInputStream(socket.getInputStream());    
             while (true) 
             {            
+                int header_size = padding.getBytes(StandardCharsets.UTF_8).length + 1;
+                byte[] header = new byte[header_size];
+                dataInputStream.readFully(header);
 
-                byte header = dataInputStream.readByte();
-                System.out.print(header); 
-    
+                int type = (int) header[header_size - 1];
 
                 int length = dataInputStream.readInt();
-    
 
                 byte[] data = new byte[length];
                 dataInputStream.readFully(data);
     
-                switch (header) 
+                switch (type) 
                 {
-                    case 0 -> 
-                    {
-
-                        String message = new String(data, StandardCharsets.UTF_8);
-                        System.out.println(name + " received message: " + message);
-                    }
+                    case 0 -> printMsg(data);
+                    
+                    case 1 -> createFile(data);
     
-                    case 1 -> 
-                    {
-
-                        String fileName = new String(data, StandardCharsets.UTF_8);
-                        File file = new File(fileName);
-                        if (!file.exists()) 
-                        {
-                            file.createNewFile();
-                        }   
-                        lastCreatedFile = file;
-                        System.out.println(name + " receiving file: " + fileName);
-                    }
-    
-                    case 2 -> 
-                    {
-                        if (lastCreatedFile != null)
-                        {
-                            try (FileOutputStream fos = new FileOutputStream(lastCreatedFile, true))
-                            {
-                                fos.write(data);
-                                System.out.println("Receiving");
-                            }
-                            catch (IOException e)
-                            {
-                                System.err.println("Error writing data to file " + lastCreatedFile.getName());
-                                e.printStackTrace();
-                            }
-                        }
-                        else
-                        {
-                            System.err.println("No file created to write data to.");
-                        }
-                    }
+                    case 2 -> writeChunkToFile(data); 
     
                     default -> System.err.println(name + " received unknown header: " + header);
                 }
             }
         } 
+
         catch (IOException e) 
         {
             System.err.println("Error receiving data");
@@ -156,7 +159,6 @@ public class Peer
 
     public void sendingData() 
     {
-        System.out.println("1");
         try 
         {
             OutputStream outputStream = socket.getOutputStream();
@@ -164,62 +166,65 @@ public class Peer
             while (true) 
             {
 
-                System.out.println("2");
-
                 byte[] messageToSend = null;
                 ByteArrayTuple chunkToSend = null;
 
 
                 synchronized (DataLock) 
                 {
-                    System.out.println("3");
 
                     while (Messages.isEmpty() && Chunks.isEmpty()) 
                     {
-                        System.out.println("4");
-
                         DataLock.wait();
                     }
 
                     if (!Messages.isEmpty()) 
                     {
-                        System.out.println("5");
-
                         messageToSend = Messages.poll();
                     } 
 
                     else if (!Chunks.isEmpty()) 
                     {
-                        System.out.println("6");
                         chunkToSend = Chunks.poll();
                     }
                 }
 
+                byte type = -1;
+                int msg_length = -1;
 
                 if (messageToSend != null) 
                 {
 
-                    byte header = (byte) 0;
-                    int msg_length = (int) messageToSend.length;
-                    byte[] msg_length_bytes = ByteBuffer.allocate(4).putInt(msg_length).array();
-                    
-                    outputStream.write(header);
-                    outputStream.write(msg_length_bytes);
-                    outputStream.write(messageToSend);
-                    outputStream.flush();
+                    type = (byte) 0;
+                    msg_length = (int) messageToSend.length;
                 } 
                 
                 else if (chunkToSend != null) 
                 {
-                    byte header = (byte) chunkToSend.get_type();
-                    int msg_length = (int) chunkToSend.getData().length;
+                    type = (byte) chunkToSend.get_type();
+                    msg_length = (int) chunkToSend.getData().length;
+                }
+                
+                if(type != -1 && msg_length != -1)
+                {
                     byte[] msg_length_bytes = ByteBuffer.allocate(4).putInt(msg_length).array();
+                    byte[] header = createHeader(type);
 
                     outputStream.write(header);
                     outputStream.write(msg_length_bytes);
-                    outputStream.write(chunkToSend.getData());
+
+                    if(type == 0)
+                        outputStream.write(messageToSend);
+
+                    if(type == 1 || type == 2)
+                        outputStream.write(chunkToSend.getData());
+
                     outputStream.flush();
+                }
+                else
+                {
                     
+                    System.out.println("Error ----------> header: " + type + "msg_length: " + msg_length);
                 }
             }
         } 
@@ -230,15 +235,27 @@ public class Peer
         }
     } 
 
-    public void addMsg(String message)
-{
-    synchronized (DataLock) 
+    public byte[] createHeader(int type)
     {
-        byte[] message_bytes = message.getBytes(StandardCharsets.UTF_8);
-        Messages.add(message_bytes);
-        DataLock.notify();
+        byte[] padding_bytes = padding.getBytes(StandardCharsets.UTF_8);
+        byte[] header = new byte[padding_bytes.length + 1];
+
+        System.arraycopy(padding_bytes, 0, header, 0, padding_bytes.length);
+        header[padding_bytes.length] = (byte) type;
+
+        return header;
     }
-}
+
+    public void addMsg(String message)
+    {
+        synchronized (DataLock) 
+        {
+            byte[] message_bytes = message.getBytes(StandardCharsets.UTF_8);
+            Messages.add(message_bytes);
+            DataLock.notify();
+        }
+    }
+
     public void addFileForSending(String name)
     {
         synchronized (FilesLock) 
@@ -265,33 +282,32 @@ public class Peer
     }
 
     private void fillQueueDataChuncks(String file_path) 
-{
-    try (FileInputStream fis = new FileInputStream(file_path)) 
-    {
-        int bytesRead;
-        File file = new File(file_path);
-        int fileSize = (int) file.length();
-        System.err.println("file size is " + fileSize);
-        
-        while (fileSize > 0) 
+    {       
+        try (FileInputStream fis = new FileInputStream(file_path)) 
         {
-            int buff_size = getBuffSize(fileSize);
-            byte[] buffer = new byte[buff_size]; 
-            bytesRead = fis.read(buffer, 0, buff_size);
-            if (bytesRead == -1) break;
-            
-            byte[] chunkData = (bytesRead < buff_size) ? Arrays.copyOf(buffer, bytesRead) : buffer;
-            System.out.println("Add new chunk fillQueue with size " + bytesRead);
-            addChunck(new ByteArrayTuple(chunkData, 2));
-            
-            fileSize -= bytesRead;
+            int bytesRead;
+            File file = new File(file_path);
+            int fileSize = (int) file.length();
+
+            while (fileSize > 0) 
+            {
+                int buff_size = getBuffSize(fileSize);
+                byte[] buffer = new byte[buff_size]; 
+                bytesRead = fis.read(buffer, 0, buff_size);
+                if (bytesRead == -1) break;
+                
+                byte[] chunkData = (bytesRead < buff_size) ? Arrays.copyOf(buffer, bytesRead) : buffer;
+                System.out.println("Add new chunk fillQueue with size " + bytesRead);
+                addChunck(new ByteArrayTuple(chunkData, 2));
+                
+                fileSize -= bytesRead;
+            }
+        } 
+        catch (IOException e) 
+        {
+            e.printStackTrace();
         }
-    } 
-    catch (IOException e) 
-    {
-        e.printStackTrace();
     }
-}
 
     public static long getFileSize(String filePath) {
         File file = new File(filePath);

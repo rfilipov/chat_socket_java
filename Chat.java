@@ -103,7 +103,6 @@ public class Chat
      {
         connectUsers();
         p1.addFileForSending("/Users/rfilipov/Documents/work/pdfs_to_read/prog_lib/[George_Stepanek]_Software_Project_Secrets_Why_So(BookFi).pdf");
-        //getUserToSendMsg();
     }
 
     public void killChat() {
