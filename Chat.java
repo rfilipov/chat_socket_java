@@ -2,107 +2,111 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 
-/// TO DO: searize deserialize, send files while sending msg(msgs have the right ot way), USE ONE SOCKET and many threads
-
 public class Chat 
-{   
+{
     private Peer p1, p2;
-    
-    public Chat(Peer serverPeer, Peer clientPeer) 
-    {
-        this.p1 = serverPeer;
-        this.p2 = clientPeer;
-    }
-    
-    /* 
-        we use one of the users to open a server socket that way there is someone listening at the target port 
-        then the other user can connect and there will be no error that way
 
-        after the connection is established we can close the server socket because we don't use it for the communication
-    */
-    public void connectUsers() 
+    public Chat(Peer p1, Peer p2) 
     {
-        /// starting the server socket to establish the connection
+        this.p1 = p1;
+        this.p2 = p2;
+    }
+
+    public void connectUsers()
+    {
         new Thread(() -> p1.startServer()).start();
-        
-        /// sleep the thread to wait for the connection to be established
+
         try 
         {
-            Thread.sleep(1000);
-        }
-        catch (InterruptedException e) 
+            Thread.sleep(2000);
+        } catch (InterruptedException e) 
         {
-            e.printStackTrace();
+            System.err.println("Interrupted while waiting for server to start: " + e.getMessage());
+            Thread.currentThread().interrupt(); 
+            return;
         }
-        
-        /// now there is already a serversocket listening so we can connect the other user with their socket 
-        p2.startConnection(p1.get_host(), p1.get_port());
+
+        new Thread(() -> p2.startConnection(p1.get_host(), p1.get_port())).start();     
     }
-    
+
     public void getUserToSendMsg() 
     {
         BufferedReader r = new BufferedReader(new InputStreamReader(System.in));
-        while (true)
+        while (true) 
         {
-            try
+            try 
             {
-                System.out.print("Enter username: ");
+                System.out.print("Enter username (" + p1.get_name() + " or " + p2.get_name() + "): ");
                 String username = r.readLine();
 
-                System.out.print("Enter message (or file:path to send a file): ");
-                String msg = r.readLine();
+                if (username.equals("admin")) 
+                {
+                    System.out.print("Enter command (e.g., 'kill' to end chat): ");
+                    String command = r.readLine();
+                    if (command.equals("kill")) 
+                    {
+                        System.out.println("Chat connection ended!");
+                        killChat();
+                        break;
+                    } 
+                    else 
+                    {
+                        System.out.println("Unknown command. Continuing chat...");
+                        continue;
+                    }
+                }
 
-                /// if the admin types "kill", the chat will close
-                if(username.equals("admin") && msg.equals("kill"))
-                {
-                    System.out.println("Chat connection ended!");
-                    killChat();
-                    break;
-                }
-    
                 Peer sender = null;
-                if (username.equals(p1.get_name()))
-                {
+                if (username.equals(p1.get_name())) 
                     sender = p1;
-                }
-                else if (username.equals(p2.get_name()))
-                {
+
+                else if (username.equals(p2.get_name())) 
                     sender = p2;
-                }
-                else
+                
+                else 
                 {
-                    System.out.println("Unknown username. Please try again.");
+                    System.out.println("Unknown username. Please use " + p1.get_name() + " or " + p2.get_name() + ".");
                     continue;
                 }
-                
-                // If the message starts with "file:", we treat it as a command to send a file.
-                if (msg.startsWith("file:"))
+
+                System.out.print("Enter message (or 'file:<path>' to send a file): ");
+                String input = r.readLine();
+
+                if (input.startsWith("file:")) 
                 {
-                    String filePath = msg.substring(5).trim();
-                    sender.sendFile(filePath);
-                }
-                else
+                    String[] parts = input.substring(5).split(":");
+                    if (parts.length >= 1) 
+                    {
+                        String filePath = parts[0].trim();
+                        sender.addFileForSending(filePath);
+                        System.out.println(sender.get_name() + " queued file: " + filePath);
+                    } 
+                    
+                    else 
+                    {
+                        System.out.println("Invalid file format. Use 'file:<path>:<priority>' (priority optional).");
+                    }
+                } 
+                else 
                 {
-                    sender.sendMsg(msg);
+                    sender.addMsg(input);
                 }
-            }
-            catch (IOException e)
+            } 
+            catch (IOException e) 
             {
                 System.err.println("Error reading input: " + e.getMessage());
             }
         }
     }
-    
+
     public void runChat()
-    {
-        /// after the connection has been made, 2 threads are created for listening for messages for both peers
+     {
         connectUsers();
-        getUserToSendMsg();
+        p1.addFileForSending("/Users/rfilipov/Documents/work/pdfs_to_read/prog_lib/[George_Stepanek]_Software_Project_Secrets_Why_So(BookFi).pdf");
+        //getUserToSendMsg();
     }
 
-    // when the socket is closed an exception will be thrown that will result in the killing of the thread
-    public void killChat()
-    {
+    public void killChat() {
         p1.closeConnection();
         p2.closeConnection();
     }
