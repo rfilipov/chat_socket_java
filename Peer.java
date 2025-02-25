@@ -136,25 +136,39 @@ public class Peer
                 byte[] header = new byte[header_size];
                 dataInputStream.readFully(header);
 
-                int type = (int) header[header_size - 1];
-
-                /// read the checksum
-                byte[] checkSum_send = new byte[16]; // 16 is the size of the md5 checksum 
-                dataInputStream.readFully(checkSum_send);
-                System.out.println("SEND CHECKSUM: " + Arrays.toString(checkSum_send));
-
-                /// read the size of the data we have send 
-                int length = dataInputStream.readInt();
-
-                /// read the data its self
-                byte[] data = new byte[length];
-                dataInputStream.readFully(data);
+                int type;
+                int recived_type = (int) header[header_size - 1];
+                byte[] data;
 
 
-                ///generate checkSum for the recived data
-                byte[] checksum_recived = create_md5(data);
-                System.out.println("RECIVED CHECKSUM: " + Arrays.toString(checksum_recived));
+                if(recived_type == 3)
+                {
+                    type = last_type;
+                    data = last_data;
+                }   
+                else
+                {
+                    type = recived_type;
 
+                    /// read the checksum
+                    byte[] checkSum_send = new byte[16]; // 16 is the size of the md5 checksum 
+                    dataInputStream.readFully(checkSum_send);
+                    System.out.println("SEND CHECKSUM: " + Arrays.toString(checkSum_send));
+
+                    /// read the size of the data we have send 
+                    int length = dataInputStream.readInt();
+
+                    /// read the data its self
+                    data = new byte[length];
+                    dataInputStream.readFully(data);
+
+
+                    ///generate checkSum for the recived data
+                    byte[] checksum_recived = create_md5(data);
+                    System.out.println("RECIVED CHECKSUM: " + Arrays.toString(checksum_recived));
+
+                }
+            
                 switch (type) 
                 {
                     case 0 -> printMsg(data);
@@ -172,6 +186,50 @@ public class Peer
         {
             System.err.println("Error receiving data");
             e.printStackTrace();
+        }
+    }
+
+
+    public void sendDataBlock(byte[] messageToSend,  ByteArrayTuple chunkToSend, OutputStream outputStream) throws IOException
+    {
+        byte type = -1;
+        int msg_length = -1;
+
+        if (messageToSend != null) 
+        {
+
+            type = (byte) 0;
+            msg_length = (int) messageToSend.length;
+        } 
+        
+        else if (chunkToSend != null) 
+        {
+            type = (byte) chunkToSend.get_type();
+            msg_length = (int) chunkToSend.getData().length;
+        }
+        
+        if(type != -1 && msg_length != -1)
+        {
+            byte[] msg_length_bytes = ByteBuffer.allocate(4).putInt(msg_length).array();
+            byte[] checkSum = type == 0 ? create_md5(messageToSend) : create_md5(chunkToSend.getData());
+            byte[] header = createHeader(type);
+
+            outputStream.write(header);
+            outputStream.write(checkSum);
+            outputStream.write(msg_length_bytes);
+
+            if(type == 0)
+                outputStream.write(messageToSend);
+
+            if(type == 1 || type == 2)
+                outputStream.write(chunkToSend.getData());
+
+            outputStream.flush();
+        }
+        else
+        {
+            
+            System.out.println("Error ----------> header: " + type + "msg_length: " + msg_length);
         }
     }
 
@@ -207,45 +265,7 @@ public class Peer
                     }
                 }
 
-                byte type = -1;
-                int msg_length = -1;
-
-                if (messageToSend != null) 
-                {
-
-                    type = (byte) 0;
-                    msg_length = (int) messageToSend.length;
-                } 
-                
-                else if (chunkToSend != null) 
-                {
-                    type = (byte) chunkToSend.get_type();
-                    msg_length = (int) chunkToSend.getData().length;
-                }
-                
-                if(type != -1 && msg_length != -1)
-                {
-                    byte[] msg_length_bytes = ByteBuffer.allocate(4).putInt(msg_length).array();
-                    byte[] checkSum = type == 0 ? create_md5(messageToSend) : create_md5(chunkToSend.getData());
-                    byte[] header = createHeader(type);
-
-                    outputStream.write(header);
-                    outputStream.write(checkSum);
-                    outputStream.write(msg_length_bytes);
-
-                    if(type == 0)
-                        outputStream.write(messageToSend);
-
-                    if(type == 1 || type == 2)
-                        outputStream.write(chunkToSend.getData());
-
-                    outputStream.flush();
-                }
-                else
-                {
-                    
-                    System.out.println("Error ----------> header: " + type + "msg_length: " + msg_length);
-                }
+                sendDataBlock(messageToSend, chunkToSend, outputStream);
             }
         } 
         catch (IOException | InterruptedException e) 

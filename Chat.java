@@ -102,10 +102,11 @@ public class Chat
     public void runChat()
      {
         connectUsers();
-        p1.addFileForSending("/Users/rfilipov/Documents/work/pdfs_to_read/prog_lib/[George_Stepanek]_Software_Project_Secrets_Why_So(BookFi).pdf");
-        //p1.addMsg("hello");
-        //p1.addMsg("Whats up");
-        //p1.addMsg("ppdsadasda");
+        //p1.addFileForSending("/Users/rfilipov/Documents/work/pdfs_to_read/prog_lib/[George_Stepanek]_Software_Project_Secrets_Why_So(BookFi).pdf");
+        p1.addMsg("hello");
+        p1.addMsg("Whats up");
+        p1.addMsg("ppdsadasda");
+        //killChat();
     }
 
     public void killChat() {
