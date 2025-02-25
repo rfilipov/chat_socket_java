@@ -10,10 +10,11 @@ import java.util.LinkedList;
 import java.util.Queue;
 
 
+/// possibly after every package send we need to send conformation package
 public class Peer 
 {
 
-    private final int bufferMaxSize = 200000;
+    private final int bufferMaxSize = 20000;
     private int port;
     private String host;
     private String name;
@@ -23,10 +24,14 @@ public class Peer
     private Deque<ByteArrayTuple> Chunks = new LinkedList<>();
     private String padding = "!,}{";
 
+    private int consecative_times_resend = 0;
+
     private OutputStream outputStream;
 
     private final Object FilesLock = new Object();
     private final Object DataLock  = new Object();
+    private final Object Writinglock = new Object();
+
 
     private File lastCreatedFile;
 
@@ -124,120 +129,150 @@ public class Peer
             System.err.println("No file created to write data to.");
         }
     }
- 
+
     public void listenForData() 
     {
+        DataInputStream dataInputStream = null;
         try 
         {
-            DataInputStream dataInputStream = new DataInputStream(socket.getInputStream());    
-            while (true) 
-            {            
-                int header_size = padding.getBytes(StandardCharsets.UTF_8).length + 1;
-                byte[] header = new byte[header_size];
+            dataInputStream = new DataInputStream(socket.getInputStream());
+        } 
+        catch (IOException e) 
+        {
+            System.err.println("Error obtaining input stream.");
+            e.printStackTrace();
+            return; // Critical failure: cannot get input stream, so exit.
+        }
+
+        while (true) 
+        {
+            try 
+            {
+                // Read the header
+                int headerSize = padding.getBytes(StandardCharsets.UTF_8).length + 1;
+                byte[] header = new byte[headerSize];
                 dataInputStream.readFully(header);
 
                 int type;
-                int recived_type = (int) header[header_size - 1];
+                int receivedType = header[headerSize - 1];
                 byte[] data;
 
-
-                if(recived_type == 3)
+                if (receivedType == 3) 
                 {
+                    System.out.println("Receiving resend data!!!");
                     type = last_type;
                     data = last_data;
 
-                    if(type == 0)
+                    if (type == 0) 
                     {
                         synchronized (DataLock) 
                         {
-                            Messages.addFirst(data);   
+                            System.out.println("Adding msg!!!!");
+                            Messages.addFirst(data);
                             DataLock.notify();
                         }
-                    }
-
-                    else if(type == 1 || type == 2)
+                    } 
+                    else if (type == 1 || type == 2) 
                     {
-                        synchronized (DataLock)
+                        synchronized (DataLock) 
                         {
+                            System.out.println("Adding chunk");
                             Chunks.addFirst(new ByteArrayTuple(last_data, last_type));
                             DataLock.notify();
                         }
-                    }
-
-                    else if(type == 3)
+                    } 
+                    else if (type == 3) 
                     {
                         System.out.println("\"Looping!!! --------> trying to send header with type 3!!!\"");
-                    }
-
-                    else
+                    } 
+                    else 
                     {
                         System.out.println("No such a header!!!");
                     }
-
-                }   
-                else
+                } 
+                else 
                 {
-                    type = recived_type;
+                    type = receivedType;
 
-                    /// read the checksum
-                    byte[] checkSum_send = new byte[16]; // 16 is the size of the md5 checksum 
-                    dataInputStream.readFully(checkSum_send);
-                    System.out.println("SEND CHECKSUM: " + Arrays.toString(checkSum_send));
+                    byte[] checkSumSend = new byte[16];
+                    dataInputStream.readFully(checkSumSend);
+                    //System.out.println("SEND CHECKSUM: " + Arrays.toString(checkSumSend));
 
-                    /// read the size of the data we have send 
                     int length = dataInputStream.readInt();
-
-                    /// read the data its self
                     data = new byte[length];
                     dataInputStream.readFully(data);
 
+                    byte[] checksumReceived = create_md5(data);
+                    // Intentional modification for testing purposes
+                    checksumReceived[1] = 0;
+                    //System.out.println("RECEIVED CHECKSUM: " + Arrays.toString(checksumReceived));
 
-                    ///generate checkSum for the recived data
-                    byte[] checksum_recived = create_md5(data);
-                    System.out.println("RECIVED CHECKSUM: " + Arrays.toString(checksum_recived));
-
-                    if(!Arrays.equals(checksum_recived, checkSum_send))
+                    if (!Arrays.equals(checksumReceived, checkSumSend)) 
                     {
-                        System.err.println("Checksums are diffrent!!!!");
-
-                        throw new Exception("Check sums are different!!!");
+                        if (consecative_times_resend > 3) 
+                        {
+                            throw new SendLimitException("Try to send data block for 4th time");
+                        }
+                        consecative_times_resend++;
+                        System.err.println("Checksums are different!!!!");
+                        throw new Exception("Checksums are different!!!");
                     }
+
+                    consecative_times_resend = 0;
 
                     switch (type) 
                     {
                         case 0 -> printMsg(data);
-                        
                         case 1 -> createFile(data);
-        
-                        case 2 -> writeChunkToFile(data); 
-        
+                        case 2 -> writeChunkToFile(data);
                         default -> System.err.println(name + " received unknown header: " + header);
                     }
                 }
+            } 
+            catch (SendLimitException e) 
+            {
+                System.out.println("Give up from sending file"); 
+                clearQueue();
+            } 
+            catch (Exception e) 
+            {
+                System.out.println("Exception caught: " + e.getMessage() + " -- attempting to resend");
+                askToResend();
             }
-        } 
-
-        catch (IOException e) 
-        {
-            System.err.println("Error receiving data");
-            e.printStackTrace();
-        }
-
-        catch(Exception e)
-        {
-            askToResend();
-            e.printStackTrace();
         }
     }
+
+    public void clearQueue()
+    {
+        synchronized (DataLock) 
+        {
+            System.out.println("Clear the queue");
+            boolean first_entry = true;
+            while (!Chunks.isEmpty())
+            { 
+                ByteArrayTuple curr_chunk = Chunks.pollFirst();     
+                if(curr_chunk.get_type() == 1 && !first_entry) break;
+                first_entry = false;
+            }
+            System.out.println("dequee size: " + Chunks.size());
+        }
+    }
+
+
 
     public void askToResend()
     {   
         byte[] header = createHeader(3);
     
-        try (OutputStream outputStream = socket.getOutputStream())
+        try
         {
-            outputStream.write(header);
-            outputStream.flush();
+            synchronized (Writinglock) 
+            {    
+                System.out.println("Resending!!!");
+                outputStream = socket.getOutputStream();
+                outputStream.write(header);
+                outputStream.flush();
+            }
         }
         catch (IOException e)
         {
@@ -272,17 +307,20 @@ public class Peer
             byte[] checkSum = type == 0 ? create_md5(messageToSend) : create_md5(chunkToSend.getData());
             byte[] header = createHeader(type);
 
-            outputStream.write(header);
-            outputStream.write(checkSum);
-            outputStream.write(msg_length_bytes);
+            synchronized (Writinglock) 
+            {
+                outputStream.write(header);
+                outputStream.write(checkSum);
+                outputStream.write(msg_length_bytes);
 
-            if(type == 0)
-                outputStream.write(messageToSend);
+                if(type == 0)
+                    outputStream.write(messageToSend);
 
-            if(type == 1 || type == 2)
-                outputStream.write(chunkToSend.getData());
+                if(type == 1 || type == 2)
+                    outputStream.write(chunkToSend.getData());
 
-            outputStream.flush();
+                outputStream.flush();
+            }
         }
         else
         {
