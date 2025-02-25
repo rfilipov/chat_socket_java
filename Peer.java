@@ -5,9 +5,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.LinkedList;
 import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 
 public class Peer 
@@ -18,9 +18,9 @@ public class Peer
     private String host;
     private String name;
     private Socket socket;
-    private Queue<byte[]> Messages = new ConcurrentLinkedQueue<>();
     private Queue<String> Files = new LinkedList<>();
-    private Queue<ByteArrayTuple> Chunks = new LinkedList<>();   
+    private Deque<byte[]> Messages = new LinkedList<>();
+    private Deque<ByteArrayTuple> Chunks = new LinkedList<>();
     private String padding = "!,}{";
 
     private OutputStream outputStream;
@@ -132,7 +132,6 @@ public class Peer
             DataInputStream dataInputStream = new DataInputStream(socket.getInputStream());    
             while (true) 
             {            
-                ///read the header
                 int header_size = padding.getBytes(StandardCharsets.UTF_8).length + 1;
                 byte[] header = new byte[header_size];
                 dataInputStream.readFully(header);
@@ -146,12 +145,34 @@ public class Peer
                 {
                     type = last_type;
                     data = last_data;
-                    
-                   //ByteArrayTuple chunk =  type == 0 ? null : new ByteArrayTuple(data, type);
 
-                    // HERE NEEDS To BE ADDED THE NEW DATA BLOCK if it is msg add it to the msg queue if it is chunk add it to the chink queueu
-                    /// IN BOUGTH OF THE QUEUES NEEDS TO BE ADDED AT THE FRONT 
+                    if(type == 0)
+                    {
+                        synchronized (DataLock) 
+                        {
+                            Messages.addFirst(data);   
+                            DataLock.notify();
+                        }
+                    }
 
+                    else if(type == 1 || type == 2)
+                    {
+                        synchronized (DataLock)
+                        {
+                            Chunks.addFirst(new ByteArrayTuple(last_data, last_type));
+                            DataLock.notify();
+                        }
+                    }
+
+                    else if(type == 3)
+                    {
+                        System.out.println("\"Looping!!! --------> trying to send header with type 3!!!\"");
+                    }
+
+                    else
+                    {
+                        System.out.println("No such a header!!!");
+                    }
 
                 }   
                 else
@@ -241,6 +262,9 @@ public class Peer
             type = (byte) chunkToSend.get_type();
             msg_length = (int) chunkToSend.getData().length;
         }
+
+        last_type = type;
+        last_data = type == 0 ? messageToSend : chunkToSend.getData();
         
         if(type != -1 && msg_length != -1)
         {
@@ -287,10 +311,10 @@ public class Peer
                         DataLock.wait();
                     
                     if (!Messages.isEmpty()) 
-                        messageToSend = Messages.poll();
+                        messageToSend = Messages.pollFirst();
                     
                     else if (!Chunks.isEmpty()) 
-                        chunkToSend = Chunks.poll();
+                        chunkToSend = Chunks.pollFirst();
                     
                 }
 
@@ -339,7 +363,7 @@ public class Peer
         synchronized (DataLock) 
         {
             byte[] message_bytes = message.getBytes(StandardCharsets.UTF_8);
-            Messages.add(message_bytes);
+            Messages.offerLast(message_bytes);
             DataLock.notify();
         }
     }
@@ -358,7 +382,7 @@ public class Peer
         synchronized (DataLock) 
         {    
             System.out.flush();
-            Chunks.offer(new_);
+            Chunks.offerLast(new_);
             DataLock.notify();
         }
     }
