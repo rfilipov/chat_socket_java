@@ -23,6 +23,8 @@ public class Peer
     private Queue<ByteArrayTuple> Chunks = new LinkedList<>();   
     private String padding = "!,}{";
 
+    private OutputStream outputStream;
+
     private final Object FilesLock = new Object();
     private final Object DataLock  = new Object();
 
@@ -144,6 +146,13 @@ public class Peer
                 {
                     type = last_type;
                     data = last_data;
+                    
+                   //ByteArrayTuple chunk =  type == 0 ? null : new ByteArrayTuple(data, type);
+
+                    // HERE NEEDS To BE ADDED THE NEW DATA BLOCK if it is msg add it to the msg queue if it is chunk add it to the chink queueu
+                    /// IN BOUGTH OF THE QUEUES NEEDS TO BE ADDED AT THE FRONT 
+
+
                 }   
                 else
                 {
@@ -173,17 +182,16 @@ public class Peer
                         throw new Exception("Check sums are different!!!");
                     }
 
-                }
-            
-                switch (type) 
-                {
-                    case 0 -> printMsg(data);
-                    
-                    case 1 -> createFile(data);
-    
-                    case 2 -> writeChunkToFile(data); 
-    
-                    default -> System.err.println(name + " received unknown header: " + header);
+                    switch (type) 
+                    {
+                        case 0 -> printMsg(data);
+                        
+                        case 1 -> createFile(data);
+        
+                        case 2 -> writeChunkToFile(data); 
+        
+                        default -> System.err.println(name + " received unknown header: " + header);
+                    }
                 }
             }
         } 
@@ -196,12 +204,27 @@ public class Peer
 
         catch(Exception e)
         {
+            askToResend();
             e.printStackTrace();
         }
     }
 
+    public void askToResend()
+    {   
+        byte[] header = createHeader(3);
+    
+        try (OutputStream outputStream = socket.getOutputStream())
+        {
+            outputStream.write(header);
+            outputStream.flush();
+        }
+        catch (IOException e)
+        {
+            e.printStackTrace();
+        }
+    }
 
-    public void sendDataBlock(byte[] messageToSend,  ByteArrayTuple chunkToSend, OutputStream outputStream) throws IOException
+    public void sendDataBlock(byte[] messageToSend,  ByteArrayTuple chunkToSend) throws IOException
     {
         byte type = -1;
         int msg_length = -1;
@@ -248,7 +271,7 @@ public class Peer
     {
         try 
         {
-            OutputStream outputStream = socket.getOutputStream();
+            outputStream = socket.getOutputStream();
 
             while (true) 
             {
@@ -261,22 +284,17 @@ public class Peer
                 {
 
                     while (Messages.isEmpty() && Chunks.isEmpty()) 
-                    {
                         DataLock.wait();
-                    }
-
+                    
                     if (!Messages.isEmpty()) 
-                    {
                         messageToSend = Messages.poll();
-                    } 
-
+                    
                     else if (!Chunks.isEmpty()) 
-                    {
                         chunkToSend = Chunks.poll();
-                    }
+                    
                 }
 
-                sendDataBlock(messageToSend, chunkToSend, outputStream);
+                sendDataBlock(messageToSend, chunkToSend);
             }
         } 
         catch (IOException | InterruptedException e) 
@@ -330,7 +348,6 @@ public class Peer
     {
         synchronized (FilesLock) 
         {    
-            System.out.println("InFileSending");
             Files.offer(name);
             FilesLock.notify();   
         }
@@ -340,7 +357,6 @@ public class Peer
     {
         synchronized (DataLock) 
         {    
-            System.out.println("addChunck");
             System.out.flush();
             Chunks.offer(new_);
             DataLock.notify();
