@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public class Peer 
 {
 
-    private final int bufferMaxSize = 2000;
+    private final int bufferMaxSize = 200000;
     private int port;
     private String host;
     private String name;
@@ -127,7 +127,6 @@ public class Peer
     {
         try 
         {
-
             DataInputStream dataInputStream = new DataInputStream(socket.getInputStream());    
             while (true) 
             {            
@@ -167,6 +166,13 @@ public class Peer
                     byte[] checksum_recived = create_md5(data);
                     System.out.println("RECIVED CHECKSUM: " + Arrays.toString(checksum_recived));
 
+                    if(!Arrays.equals(checksum_recived, checkSum_send))
+                    {
+                        System.err.println("Checksums are diffrent!!!!");
+
+                        throw new Exception("Check sums are different!!!");
+                    }
+
                 }
             
                 switch (type) 
@@ -185,6 +191,11 @@ public class Peer
         catch (IOException e) 
         {
             System.err.println("Error receiving data");
+            e.printStackTrace();
+        }
+
+        catch(Exception e)
+        {
             e.printStackTrace();
         }
     }
