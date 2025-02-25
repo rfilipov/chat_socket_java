@@ -2,6 +2,8 @@ import java.io.*;
 import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.Queue;
@@ -11,7 +13,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public class Peer 
 {
 
-    private final int bufferMaxSize = 2000000;
+    private final int bufferMaxSize = 2000;
     private int port;
     private String host;
     private String name;
@@ -25,6 +27,9 @@ public class Peer
     private final Object DataLock  = new Object();
 
     private File lastCreatedFile;
+
+    private byte[] last_data = null;
+    private int last_type = -1;
 
     public Peer(int port, String host, String name) 
     {
@@ -126,17 +131,30 @@ public class Peer
             DataInputStream dataInputStream = new DataInputStream(socket.getInputStream());    
             while (true) 
             {            
+                ///read the header
                 int header_size = padding.getBytes(StandardCharsets.UTF_8).length + 1;
                 byte[] header = new byte[header_size];
                 dataInputStream.readFully(header);
 
                 int type = (int) header[header_size - 1];
 
+                /// read the checksum
+                byte[] checkSum_send = new byte[16]; // 16 is the size of the md5 checksum 
+                dataInputStream.readFully(checkSum_send);
+                System.out.println("SEND CHECKSUM: " + Arrays.toString(checkSum_send));
+
+                /// read the size of the data we have send 
                 int length = dataInputStream.readInt();
 
+                /// read the data its self
                 byte[] data = new byte[length];
                 dataInputStream.readFully(data);
-    
+
+
+                ///generate checkSum for the recived data
+                byte[] checksum_recived = create_md5(data);
+                System.out.println("RECIVED CHECKSUM: " + Arrays.toString(checksum_recived));
+
                 switch (type) 
                 {
                     case 0 -> printMsg(data);
@@ -208,9 +226,11 @@ public class Peer
                 if(type != -1 && msg_length != -1)
                 {
                     byte[] msg_length_bytes = ByteBuffer.allocate(4).putInt(msg_length).array();
+                    byte[] checkSum = type == 0 ? create_md5(messageToSend) : create_md5(chunkToSend.getData());
                     byte[] header = createHeader(type);
 
                     outputStream.write(header);
+                    outputStream.write(checkSum);
                     outputStream.write(msg_length_bytes);
 
                     if(type == 0)
@@ -234,6 +254,25 @@ public class Peer
             e.printStackTrace();
         }
     } 
+
+     public byte[] create_md5(byte[] data)
+    {
+        byte[] digest = null;
+
+        try
+        {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            digest = md.digest(data);
+        }
+        catch (NoSuchAlgorithmException e) 
+        {
+            System.err.println("MD5 algorithm not found");
+         
+        }
+
+        System.out.println("size of digest: " + digest.length);
+        return digest;
+    }
 
     public byte[] createHeader(int type)
     {
@@ -271,6 +310,7 @@ public class Peer
         synchronized (DataLock) 
         {    
             System.out.println("addChunck");
+            System.out.flush();
             Chunks.offer(new_);
             DataLock.notify();
         }
