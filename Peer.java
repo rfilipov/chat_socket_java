@@ -141,14 +141,13 @@ public class Peer
         {
             System.err.println("Error obtaining input stream.");
             e.printStackTrace();
-            return; // Critical failure: cannot get input stream, so exit.
+            return; 
         }
 
         while (true) 
         {
             try 
             {
-                // Read the header
                 int headerSize = padding.getBytes(StandardCharsets.UTF_8).length + 1;
                 byte[] header = new byte[headerSize];
                 dataInputStream.readFully(header);
@@ -159,60 +158,33 @@ public class Peer
 
                 if (receivedType == 3) 
                 {
-                    System.out.println("Receiving resend data!!!");
-                    type = last_type;
-                    data = last_data;
-
-                    if (type == 0) 
-                    {
-                        synchronized (DataLock) 
-                        {
-                            System.out.println("Adding msg!!!!");
-                            Messages.addFirst(data);
-                            DataLock.notify();
-                        }
-                    } 
-                    else if (type == 1 || type == 2) 
-                    {
-                        synchronized (DataLock) 
-                        {
-                            System.out.println("Adding chunk");
-                            Chunks.addFirst(new ByteArrayTuple(last_data, last_type));
-                            DataLock.notify();
-                        }
-                    } 
-                    else if (type == 3) 
-                    {
-                        System.out.println("\"Looping!!! --------> trying to send header with type 3!!!\"");
-                    } 
-                    else 
-                    {
-                        System.out.println("No such a header!!!");
-                    }
+                    processResending(last_type, last_data);
                 } 
+                else if(receivedType == 4)
+                {
+                    clearQueue();
+                }
                 else 
                 {
                     type = receivedType;
 
                     byte[] checkSumSend = new byte[16];
                     dataInputStream.readFully(checkSumSend);
-                    //System.out.println("SEND CHECKSUM: " + Arrays.toString(checkSumSend));
 
                     int length = dataInputStream.readInt();
                     data = new byte[length];
                     dataInputStream.readFully(data);
 
                     byte[] checksumReceived = create_md5(data);
-                    // Intentional modification for testing purposes
-                    checksumReceived[1] = 0;
-                    //System.out.println("RECEIVED CHECKSUM: " + Arrays.toString(checksumReceived));
 
                     if (!Arrays.equals(checksumReceived, checkSumSend)) 
                     {
                         if (consecative_times_resend > 3) 
                         {
+                            consecative_times_resend = 0;
                             throw new SendLimitException("Try to send data block for 4th time");
                         }
+                    
                         consecative_times_resend++;
                         System.err.println("Checksums are different!!!!");
                         throw new Exception("Checksums are different!!!");
@@ -229,16 +201,46 @@ public class Peer
                     }
                 }
             } 
+
             catch (SendLimitException e) 
             {
                 System.out.println("Give up from sending file"); 
-                clearQueue();
+                sendFailMsg();
             } 
             catch (Exception e) 
             {
                 System.out.println("Exception caught: " + e.getMessage() + " -- attempting to resend");
                 askToResend();
             }
+
+        }
+    }
+
+    public void processResending(int type, byte[] data)
+    {
+        if (type == 0) 
+        {
+            synchronized (DataLock) 
+            {
+                Messages.addFirst(data);
+                DataLock.notify();
+            }
+        } 
+        else if (type == 1 || type == 2) 
+        {
+            synchronized (DataLock) 
+            {
+                Chunks.addFirst(new ByteArrayTuple(data, type));
+                DataLock.notify();
+            }
+        } 
+        else if (type == 3) 
+        {
+            System.out.println("\"Looping!!! --------> trying to send header with type 3!!!\"");
+        } 
+        else 
+        {
+            System.out.println("No such a header!!!");
         }
     }
 
@@ -258,6 +260,25 @@ public class Peer
         }
     }
 
+
+    public void sendFailMsg()
+    {
+        byte[] header = createHeader(4);
+        try
+        {
+            synchronized (Writinglock) 
+            {    
+                System.out.println("SendFailMsg!!!");
+                outputStream = socket.getOutputStream();
+                outputStream.write(header);
+                outputStream.flush();
+            }
+        }
+        catch (IOException e)
+        {
+            e.printStackTrace();
+        }
+    }
 
 
     public void askToResend()
@@ -381,7 +402,6 @@ public class Peer
          
         }
 
-        System.out.println("size of digest: " + digest.length);
         return digest;
     }
 
