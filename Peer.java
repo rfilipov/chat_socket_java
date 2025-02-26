@@ -8,7 +8,7 @@ import java.util.Arrays;
 import java.util.Deque;
 import java.util.LinkedList;
 import java.util.Queue;
-
+/// one problem if a file is very very large if the chunks are loaded while send and a clearQueue occurs we will
 
 public class Peer 
 {
