@@ -10,10 +10,8 @@ import java.util.LinkedList;
 import java.util.Queue;
 
 
-/// possibly after every package send we need to send conformation package
 public class Peer 
 {
-
     private final int bufferMaxSize = 20000;
     private int port;
     private String host;
@@ -24,6 +22,10 @@ public class Peer
     private Deque<ByteArrayTuple> Chunks = new LinkedList<>();
     private String padding = "!,}{";
 
+    ///test veriables
+    private boolean test_check_sum_flag = true;
+    private boolean test_faild_to_recend = true;
+
     private int consecative_times_resend = 0;
 
     private OutputStream outputStream;
@@ -31,6 +33,8 @@ public class Peer
     private final Object FilesLock = new Object();
     private final Object DataLock  = new Object();
     private final Object Writinglock = new Object();
+
+    private int type_last_resend_msg = -1;
 
 
     private File lastCreatedFile;
@@ -152,54 +156,58 @@ public class Peer
                 byte[] header = new byte[headerSize];
                 dataInputStream.readFully(header);
 
-                int type;
                 int receivedType = header[headerSize - 1];
-                byte[] data;
 
-                if (receivedType == 3) 
+                switch (receivedType) 
                 {
-                    processResending(last_type, last_data);
-                } 
-                else if(receivedType == 4)
-                {
-                    clearQueue();
-                }
-                else 
-                {
-                    type = receivedType;
-
-                    byte[] checkSumSend = new byte[16];
-                    dataInputStream.readFully(checkSumSend);
-
-                    int length = dataInputStream.readInt();
-                    data = new byte[length];
-                    dataInputStream.readFully(data);
-
-                    byte[] checksumReceived = create_md5(data);
-
-                    if (!Arrays.equals(checksumReceived, checkSumSend)) 
+                    case 3 -> processResending(last_type, last_data);
+                    case 4 -> clearQueue();
+                    default -> 
                     {
-                        if (consecative_times_resend > 3) 
+                        byte[] checkSumSend = new byte[16];
+                        dataInputStream.readFully(checkSumSend);
+                
+                        int length = dataInputStream.readInt();
+                        byte[] data = new byte[length];
+                        dataInputStream.readFully(data);
+                
+                        byte[] checksumReceived = create_md5(data);
+
+                        if(test_check_sum_flag)
                         {
-                            consecative_times_resend = 0;
-                            throw new SendLimitException("Try to send data block for 4th time");
+                            test_check_sum_flag = false;
+                            throw new Exception("Checksums are different!!!");
                         }
-                    
-                        consecative_times_resend++;
-                        System.err.println("Checksums are different!!!!");
-                        throw new Exception("Checksums are different!!!");
-                    }
 
-                    consecative_times_resend = 0;
-
-                    switch (type) 
-                    {
-                        case 0 -> printMsg(data);
-                        case 1 -> createFile(data);
-                        case 2 -> writeChunkToFile(data);
-                        default -> System.err.println(name + " received unknown header: " + header);
+                        if(test_faild_to_recend)
+                        {
+                            test_faild_to_recend = false;
+                            throw new SendLimitException("\"Try to send data block for 4th time\"");
+                        }
+                
+                        if (!Arrays.equals(checksumReceived, checkSumSend)) 
+                        {
+                            if (consecative_times_resend > 3) 
+                            {
+                                consecative_times_resend = 0;
+                                throw new SendLimitException("Try to send data block for 4th time");
+                            }
+                            consecative_times_resend++;
+                            System.err.println("Checksums are different!!!!");
+                            throw new Exception("Checksums are different!!!");
+                        }
+                
+                        consecative_times_resend = 0;
+                
+                        switch (receivedType) {
+                            case 0 -> printMsg(data);
+                            case 1 -> createFile(data);
+                            case 2 -> writeChunkToFile(data);
+                            default -> System.err.println(name + " received unknown header: " + header);
+                        }
                     }
                 }
+                
             } 
 
             catch (SendLimitException e) 
@@ -218,6 +226,8 @@ public class Peer
 
     public void processResending(int type, byte[] data)
     {
+        type_last_resend_msg = type;
+
         if (type == 0) 
         {
             synchronized (DataLock) 
@@ -248,15 +258,24 @@ public class Peer
     {
         synchronized (DataLock) 
         {
-            System.out.println("Clear the queue");
-            boolean first_entry = true;
-            while (!Chunks.isEmpty())
-            { 
-                ByteArrayTuple curr_chunk = Chunks.pollFirst();     
-                if(curr_chunk.get_type() == 1 && !first_entry) break;
-                first_entry = false;
+            if(type_last_resend_msg == 1 || type_last_resend_msg == 2)
+            {
+                System.out.println("Clear the queue");
+                boolean first_entry = true;
+                while (!Chunks.isEmpty())
+                { 
+                    ByteArrayTuple curr_chunk = Chunks.pollFirst();     
+                    if(curr_chunk.get_type() == 1 && !first_entry) break;
+                    first_entry = false;
+                }
+                System.out.println("dequee size: " + Chunks.size());
             }
-            System.out.println("dequee size: " + Chunks.size());
+            else if(type_last_resend_msg == 0)
+            {
+                System.out.println("Remove from he msg queue");
+                Messages.pollFirst();
+            }
+            
         }
     }
 
@@ -335,8 +354,9 @@ public class Peer
                 outputStream.write(msg_length_bytes);
 
                 if(type == 0)
+                {
                     outputStream.write(messageToSend);
-
+                }
                 if(type == 1 || type == 2)
                     outputStream.write(chunkToSend.getData());
 
@@ -345,7 +365,6 @@ public class Peer
         }
         else
         {
-            
             System.out.println("Error ----------> header: " + type + "msg_length: " + msg_length);
         }
     }
